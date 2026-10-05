@@ -10,8 +10,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Classifies the diff so docs-only changes skip the code checks. A docs-only
+  # change is: every changed path is Markdown / docs/ / LICENSE / .gitignore.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: filter
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+          if [ -z "${BASE}" ] || [ "${BASE}" = "0000000000000000000000000000000000000000" ]; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          DOC_ONLY=true
+          if ! CHANGED="$(git diff --name-only "${BASE}" HEAD 2>/dev/null)"; then
+            DOC_ONLY=false
+          fi
+          while IFS= read -r f; do
+            [ -n "${f}" ] || continue
+            case "${f}" in
+              *.md|docs/*|LICENSE|LICENSE.*|.gitignore) : ;;
+              *) DOC_ONLY=false; break ;;
+            esac
+          done <<< "${CHANGED}"
+          if [ "${DOC_ONLY}" = "true" ]; then
+            echo "code=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "code=true" >> "${GITHUB_OUTPUT}"
+          fi
+
   check:
     name: check (${{ matrix.os }})
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -43,16 +89,32 @@ jobs:
       - name: Functional tests (local GraphQL server)
         run: uv run pytest tests/functional -m functional --no-cov
 
+  # Single stable status check for branch protection. Always runs; a docs-only
+  # change (code=false) passes with the code checks correctly skipped, but a
+  # skipped job when code DID change is a failure (no-skip-masking).
   ci-success:
     name: CI success
     if: always()
-    needs: [check]
+    needs: [changes, check]
     runs-on: ubuntu-latest
     steps:
-      - name: Verify the check matrix passed
+      - name: Verify required jobs
+        env:
+          CODE: ${{ needs.changes.outputs.code }}
+          CHANGES: ${{ needs.changes.result }}
+          CHECK: ${{ needs.check.result }}
         run: |
-          if [ "${{ needs.check.result }}" != "success" ]; then
-            echo "::error::check matrix did not succeed (result: ${{ needs.check.result }})"
+          echo "code=${CODE} changes=${CHANGES} check=${CHECK}"
+          if [ "${CHANGES}" != "success" ]; then
+            echo "::error::changes job did not succeed (${CHANGES})"
             exit 1
           fi
-          echo "All checks passed."
+          if [ "${CODE}" = "true" ]; then
+            if [ "${CHECK}" != "success" ]; then
+              echo "::error::code changed but the check matrix did not succeed (${CHECK})"
+              exit 1
+            fi
+          else
+            echo "docs-only change - code checks correctly skipped"
+          fi
+          echo "CI success"
