@@ -87,7 +87,7 @@ def check_syntax() -> bool:
 def check_ruff(*, fix: bool) -> bool:
     """Lint with ruff (the repo's documented gate)."""
     print("\n== Ruff (lint) ==")
-    cmd = ["python", "-m", "ruff", "check"]
+    cmd = [sys.executable, "-m", "ruff", "check"]
     if fix:
         cmd.append("--fix")
     cmd.append(".")
@@ -103,7 +103,7 @@ def check_ruff(*, fix: bool) -> bool:
 def check_mypy() -> bool:
     """Type-check with mypy (strict, configured in pyproject.toml)."""
     print("\n== mypy ==")
-    result = _run(["python", "-m", "mypy"])
+    result = _run([sys.executable, "-m", "mypy"])
     if result.returncode == 0:
         print("  ok: type checking passed")
         return True
@@ -116,7 +116,7 @@ def check_bandit() -> bool:
     """Security-scan the shipped package with bandit."""
     print("\n== Bandit (security) ==")
     result = _run(
-        ["python", "-m", "bandit", "-r", _APP_DIR, "-f", "json", "-l", "-i", "--quiet"]
+        [sys.executable, "-m", "bandit", "-r", _APP_DIR, "-f", "json", "-l", "-i", "--quiet"]
     )
     try:
         issues = json.loads(result.stdout).get("results", [])
@@ -160,7 +160,7 @@ def check_pip_audit() -> bool:
         req_path = tmp.name
     try:
         result = _run(
-            ["python", "-m", "pip_audit", "-r", req_path, "--format", "json", "--strict"]
+            [sys.executable, "-m", "pip_audit", "-r", req_path, "--format", "json", "--strict"]
         )
     finally:
         Path(req_path).unlink(missing_ok=True)
