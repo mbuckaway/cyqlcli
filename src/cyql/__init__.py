@@ -5,8 +5,8 @@
 # This file is proprietary and confidential. Unauthorized copying, distribution,
 # or use of this file, via any medium, is strictly prohibited without the
 # express written permission of Mark Buckaway.
-"""Read-only Python client and CLI for the Cyql cycling-club API."""
+"""Python client and CLI for the Cyql cycling-club API."""
 
 __all__ = ["__version__"]
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

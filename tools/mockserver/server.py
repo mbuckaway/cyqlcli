@@ -27,36 +27,76 @@ SDL = """
 scalar UUID
 scalar DateTime
 
+enum RideType { RACE ATB CROSS TOUR VIRTUAL OTHER }
+enum ClubMemberStatus { PENDING APPROVED BLOCKED REMOVED EXPIRED ALL }
+enum ParticipateStatus { UNKNOWN YES NO INTERESTED WAITING REFUNDED REFUND_REQUESTED }
+enum RankingScoreType { NONE DISTANCE SCORE NUMBER_OF_RIDES }
+enum RankingModel { CLUB PUBLIC }
+
 type ClubStatsDto { totalRides: Int! memberCount: Int! totalKilometers: Float! totalAdmins: Int! }
 type ClubInfoDto {
   title: String city: String description: String address: String
   postalCode: String contact: String email: String createdAt: DateTime
 }
 type RideDto {
-  id: UUID title: String description: String startTime: DateTime rideType: String
-  location: String distance: Float altitude: Float averageSpeed: Float duration: Int
-  isPublic: Boolean maxGroupSize: Int participantsCount: Int shareUrl: String gpxUrl: String
+  id: UUID title: String description: String startTime: DateTime rideType: RideType
+  location: String hasStops: Boolean distance: Float altitude: Float averageSpeed: Float
+  duration: Int isPublic: Boolean maxGroupSize: Int shareUrl: String gpxUrl: String
+  imageUrl: String
 }
 type PagedResultOfRideDto {
   items: [RideDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
 }
 type MemberDto {
-  id: UUID! firstName: String lastName: String email: String status: String
+  id: UUID! firstName: String lastName: String email: String status: ClubMemberStatus!
   memberSinceUtc: DateTime isAdmin: Boolean! isRoadCaptain: Boolean!
 }
 type PagedResultOfMemberDto {
   items: [MemberDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
 }
+type RideMemberDto {
+  memberId: UUID firstName: String lastName: String status: ParticipateStatus
+  waiverAccepted: Boolean
+}
+type PagedResultOfRideMemberDto {
+  items: [RideMemberDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
+}
 type EventDto {
   id: UUID title: String description: String
   startDateTime: DateTime endTime: DateTime location: String
+  imageUrl: String pdfTitle: String pdfUrl: String
 }
 type PagedResultOfEventDto {
   items: [EventDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
 }
-type NewsDto { id: UUID title: String description: String publicationDate: DateTime }
+type NewsDto {
+  id: UUID title: String description: String publicationDate: DateTime
+  editDate: DateTime imageUrl: String pdfTitle: String pdfUrl: String
+}
 type PagedResultOfNewsDto {
   items: [NewsDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
+}
+type ChallengeDto {
+  id: UUID title: String description: String rules: String scoringCriteria: String
+  prizes: String scoreType: RankingScoreType startDate: DateTime endDate: DateTime
+  onlyStravaVerifiedRides: Boolean model: RankingModel participantCount: Int
+  iconUrl: String imageUrl: String
+}
+type PagedResultOfChallengeDto {
+  items: [ChallengeDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
+}
+type ChallengeScoreDto {
+  memberId: UUID memberName: String score: Float rank: Int rideCount: Int
+}
+type PagedResultOfChallengeScoreDto {
+  items: [ChallengeScoreDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
+}
+type GpxRouteDto {
+  id: UUID title: String description: String distance: Int altitude: Int
+  createdAt: DateTime updatedAt: DateTime downloadUrl: String isPublic: Boolean
+}
+type PagedResultOfGpxRouteDto {
+  items: [GpxRouteDto!]! totalCount: Int! page: Int! pageSize: Int! hasNextPage: Boolean!
 }
 
 type Query {
@@ -64,9 +104,26 @@ type Query {
   clubInfo: ClubInfoDto!
   rides(page: Int, pageSize: Int, isUpcoming: Boolean, search: String): PagedResultOfRideDto!
   rideById(rideId: UUID!): RideDto
-  members(page: Int, pageSize: Int, search: String): PagedResultOfMemberDto!
-  events(page: Int, pageSize: Int, search: String): PagedResultOfEventDto!
+  rideParticipants(
+    rideId: UUID!, page: Int, pageSize: Int, search: String
+  ): PagedResultOfRideMemberDto!
+  members(
+    page: Int, pageSize: Int, search: String, memberStatus: ClubMemberStatus
+  ): PagedResultOfMemberDto!
+  memberById(memberId: UUID!): MemberDto
+  events(
+    page: Int, pageSize: Int, fetchType: String, search: String
+  ): PagedResultOfEventDto!
+  eventById(eventId: UUID!): EventDto
   news(page: Int, pageSize: Int, search: String): PagedResultOfNewsDto!
+  newsById(newsId: UUID!): NewsDto
+  challenges(page: Int, pageSize: Int, search: String): PagedResultOfChallengeDto!
+  challengeById(challengeId: UUID!): ChallengeDto
+  challengeScores(
+    challengeId: UUID!, page: Int, pageSize: Int, search: String
+  ): PagedResultOfChallengeScoreDto!
+  gpxRoutes(page: Int, pageSize: Int, search: String): PagedResultOfGpxRouteDto!
+  gpxRouteById(gpxRouteId: UUID!): GpxRouteDto
 }
 """
 
@@ -89,49 +146,52 @@ RIDES = [
         "startTime": "2026-06-16T23:00:00Z",
         "rideType": "ATB",
         "location": "Riverside Park",
+        "hasStops": True,
         "distance": 16.0,
         "altitude": 50.0,
         "averageSpeed": 22.0,
         "duration": 120,
         "isPublic": True,
         "maxGroupSize": 20,
-        "participantsCount": 6,
         "shareUrl": "https://cyqlapp.app.link/ride1",
         "gpxUrl": None,
+        "imageUrl": "https://images.example/ride1.png",
     },
     {
         "id": "22222222-2222-2222-2222-222222222222",
         "title": "Gravel Grind",
         "description": "Long gravel route",
         "startTime": "2026-06-20T13:00:00Z",
-        "rideType": "GRAVEL",
+        "rideType": "TOUR",
         "location": "Arkell Springs",
+        "hasStops": False,
         "distance": 60.0,
         "altitude": 400.0,
         "averageSpeed": 25.0,
         "duration": 180,
         "isPublic": True,
         "maxGroupSize": 15,
-        "participantsCount": 3,
         "shareUrl": "https://cyqlapp.app.link/ride2",
         "gpxUrl": None,
+        "imageUrl": None,
     },
     {
         "id": "33333333-3333-3333-3333-333333333333",
         "title": "Sunday Spin",
         "description": "Easy recovery spin",
         "startTime": "2026-06-21T14:00:00Z",
-        "rideType": "ROAD",
+        "rideType": "RACE",
         "location": "Hydrocut",
+        "hasStops": False,
         "distance": 30.0,
         "altitude": 150.0,
         "averageSpeed": 28.0,
         "duration": 90,
         "isPublic": True,
         "maxGroupSize": 10,
-        "participantsCount": 1,
         "shareUrl": "https://cyqlapp.app.link/ride3",
         "gpxUrl": None,
+        "imageUrl": None,
     },
 ]
 MEMBERS = [
@@ -156,6 +216,33 @@ MEMBERS = [
         "isRoadCaptain": True,
     },
 ]
+RIDE_PARTICIPANTS = {
+    "11111111-1111-1111-1111-111111111111": [
+        {
+            "memberId": "aaaaaaaa-0000-0000-0000-000000000001",
+            "firstName": "Ada",
+            "lastName": "Byron",
+            "status": "YES",
+            "waiverAccepted": True,
+        },
+        {
+            "memberId": "aaaaaaaa-0000-0000-0000-000000000002",
+            "firstName": "Grace",
+            "lastName": "Hopper",
+            "status": "NO",
+            "waiverAccepted": False,
+        },
+    ],
+    "22222222-2222-2222-2222-222222222222": [
+        {
+            "memberId": "aaaaaaaa-0000-0000-0000-000000000002",
+            "firstName": "Grace",
+            "lastName": "Hopper",
+            "status": "INTERESTED",
+            "waiverAccepted": False,
+        }
+    ],
+}
 EVENTS = [
     {
         "id": "eeeeeeee-0000-0000-0000-000000000001",
@@ -164,6 +251,9 @@ EVENTS = [
         "startDateTime": "2026-09-14T08:00:00Z",
         "endTime": "2026-09-14T17:00:00Z",
         "location": "Guelph Lake",
+        "imageUrl": "https://images.example/epic.png",
+        "pdfTitle": "Festival guide",
+        "pdfUrl": "https://files.example/epic.pdf",
     },
 ]
 NEWS = [
@@ -172,6 +262,95 @@ NEWS = [
         "title": "Trails are open",
         "description": "Spring trails now open",
         "publicationDate": "2026-04-01T00:00:00Z",
+        "editDate": "2026-04-02T00:00:00Z",
+        "imageUrl": "https://images.example/trails.png",
+        "pdfTitle": "Trail report",
+        "pdfUrl": "https://files.example/trails.pdf",
+    },
+]
+CHALLENGES = [
+    {
+        "id": "cccccccc-0000-0000-0000-000000000001",
+        "title": "Summer Distance Challenge",
+        "description": "Ride the most kilometres",
+        "rules": "Log every ride",
+        "scoringCriteria": "Total kilometres",
+        "prizes": "Club jersey",
+        "scoreType": "DISTANCE",
+        "startDate": "2026-06-01T00:00:00Z",
+        "endDate": "2026-08-31T00:00:00Z",
+        "onlyStravaVerifiedRides": True,
+        "model": "PUBLIC",
+        "participantCount": 2,
+        "iconUrl": "https://images.example/summer-icon.png",
+        "imageUrl": "https://images.example/summer.png",
+    },
+    {
+        "id": "cccccccc-0000-0000-0000-000000000002",
+        "title": "Climb Challenge",
+        "description": "Climb the most elevation",
+        "rules": "Log every climb",
+        "scoringCriteria": "Total elevation",
+        "prizes": "Bragging rights",
+        "scoreType": "SCORE",
+        "startDate": "2026-07-01T00:00:00Z",
+        "endDate": "2026-07-31T00:00:00Z",
+        "onlyStravaVerifiedRides": False,
+        "model": "CLUB",
+        "participantCount": 1,
+        "iconUrl": None,
+        "imageUrl": None,
+    },
+]
+CHALLENGE_SCORES = {
+    "cccccccc-0000-0000-0000-000000000001": [
+        {
+            "memberId": "aaaaaaaa-0000-0000-0000-000000000001",
+            "memberName": "Ada",
+            "score": 420.5,
+            "rank": 1,
+            "rideCount": 12,
+        },
+        {
+            "memberId": "aaaaaaaa-0000-0000-0000-000000000002",
+            "memberName": "Grace",
+            "score": 310.0,
+            "rank": 2,
+            "rideCount": 9,
+        },
+    ],
+    "cccccccc-0000-0000-0000-000000000002": [
+        {
+            "memberId": "aaaaaaaa-0000-0000-0000-000000000002",
+            "memberName": "Grace",
+            "score": 1500.0,
+            "rank": 1,
+            "rideCount": 4,
+        },
+    ],
+}
+GPX_ROUTES = [
+    {
+        "id": "gggggggg-0000-0000-0000-000000000001",
+        "title": "Riverside Loop",
+        "description": "Easy riverside loop",
+        "distance": 16,
+        "altitude": 50,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-02-01T00:00:00Z",
+        "downloadUrl": "https://files.example/riverside.gpx",
+        "isPublic": True,
+    },
+    {
+        "id": "gggggggg-0000-0000-0000-000000000002",
+        "title": "Arkell Springs",
+        "description": "Climbing route",
+        "distance": 60,
+        "altitude": 400,
+        "createdAt": "2026-03-01T00:00:00Z",
+        "updatedAt": "2026-03-05T00:00:00Z",
+        "downloadUrl": "https://files.example/arkell.gpx",
+        "isPublic": False,
     },
 ]
 
@@ -198,6 +377,10 @@ def _paginate(rows: list[dict[str, Any]], kwargs: dict[str, Any]) -> dict[str, A
     }
 
 
+def _find_by_id(rows: list[dict[str, Any]], entity_id: str) -> dict[str, Any] | None:
+    return next((row for row in rows if row["id"] == entity_id), None)
+
+
 @query.field("clubStats")
 def resolve_club_stats(*_: Any) -> dict[str, Any]:
     return CLUB_STATS
@@ -215,7 +398,12 @@ def resolve_rides(_: Any, __: Any, **kwargs: Any) -> dict[str, Any]:
 
 @query.field("rideById")
 def resolve_ride_by_id(_: Any, __: Any, rideId: str) -> dict[str, Any] | None:
-    return next((ride for ride in RIDES if ride["id"] == rideId), None)
+    return _find_by_id(RIDES, rideId)
+
+
+@query.field("rideParticipants")
+def resolve_ride_participants(_: Any, __: Any, rideId: str, **kwargs: Any) -> dict[str, Any]:
+    return _paginate(RIDE_PARTICIPANTS.get(rideId, []), kwargs)
 
 
 @query.field("members")
@@ -223,14 +411,56 @@ def resolve_members(_: Any, __: Any, **kwargs: Any) -> dict[str, Any]:
     return _paginate(MEMBERS, kwargs)
 
 
+@query.field("memberById")
+def resolve_member_by_id(_: Any, __: Any, memberId: str) -> dict[str, Any] | None:
+    return _find_by_id(MEMBERS, memberId)
+
+
 @query.field("events")
 def resolve_events(_: Any, __: Any, **kwargs: Any) -> dict[str, Any]:
     return _paginate(EVENTS, kwargs)
 
 
+@query.field("eventById")
+def resolve_event_by_id(_: Any, __: Any, eventId: str) -> dict[str, Any] | None:
+    return _find_by_id(EVENTS, eventId)
+
+
 @query.field("news")
 def resolve_news(_: Any, __: Any, **kwargs: Any) -> dict[str, Any]:
     return _paginate(NEWS, kwargs)
+
+
+@query.field("newsById")
+def resolve_news_by_id(_: Any, __: Any, newsId: str) -> dict[str, Any] | None:
+    return _find_by_id(NEWS, newsId)
+
+
+@query.field("challenges")
+def resolve_challenges(_: Any, __: Any, **kwargs: Any) -> dict[str, Any]:
+    return _paginate(CHALLENGES, kwargs)
+
+
+@query.field("challengeById")
+def resolve_challenge_by_id(_: Any, __: Any, challengeId: str) -> dict[str, Any] | None:
+    return _find_by_id(CHALLENGES, challengeId)
+
+
+@query.field("challengeScores")
+def resolve_challenge_scores(
+    _: Any, __: Any, challengeId: str, **kwargs: Any
+) -> dict[str, Any]:
+    return _paginate(CHALLENGE_SCORES.get(challengeId, []), kwargs)
+
+
+@query.field("gpxRoutes")
+def resolve_gpx_routes(_: Any, __: Any, **kwargs: Any) -> dict[str, Any]:
+    return _paginate(GPX_ROUTES, kwargs)
+
+
+@query.field("gpxRouteById")
+def resolve_gpx_route_by_id(_: Any, __: Any, gpxRouteId: str) -> dict[str, Any] | None:
+    return _find_by_id(GPX_ROUTES, gpxRouteId)
 
 
 schema = make_executable_schema(SDL, query, uuid_scalar, datetime_scalar)

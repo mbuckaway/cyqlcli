@@ -7,10 +7,10 @@
 # express written permission of Mark Buckaway.
 """Authentication strategies for the two Cyql GraphQL endpoints.
 
-``ApiKeyAuth`` targets the official, read-only ``/api/graphql`` endpoint and is the
-default. ``SessionTokenAuth`` targets the internal ``/graphql`` endpoint (Bearer JWT);
-it is the only path that can perform writes, which are deferred, so it is kept as a
-ready-to-use strategy but not yet wired to any mutation methods.
+``ApiKeyAuth`` targets the official, read-only ``/api/graphql`` endpoint and is
+the read strategy. ``SessionTokenAuth`` targets the internal ``/graphql`` endpoint
+(Bearer JWT); it is optional and used only when an internal session token is
+configured, because writes are deferred.
 """
 
 from __future__ import annotations
@@ -18,10 +18,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from cyql.config import AuthMode, Settings
+from cyql.config import Settings
 from cyql.errors import MissingCredentialError
 
-__all__ = ["ApiKeyAuth", "Auth", "SessionTokenAuth", "build_auth"]
+__all__ = [
+    "ApiKeyAuth",
+    "Auth",
+    "SessionTokenAuth",
+    "build_internal_auth",
+    "build_read_auth",
+]
 
 
 @runtime_checkable
@@ -58,21 +64,21 @@ class SessionTokenAuth:
         return {"Authorization": f"Bearer {self.token}"}
 
 
-def build_auth(settings: Settings) -> Auth:
-    """Build the auth strategy selected by ``settings.auth_mode``.
+def build_read_auth(settings: Settings) -> ApiKeyAuth:
+    """Build the official read-only API-key auth strategy.
 
     Raises:
-        MissingCredentialError: if the credential required by the mode is absent.
+        MissingCredentialError: if ``settings.api_key`` is empty.
     """
-    if settings.auth_mode is AuthMode.SESSION_TOKEN:
-        if not settings.session_token:
-            raise MissingCredentialError(
-                "CYQL_SESSION_TOKEN is required for session-token auth"
-            )
-        return SessionTokenAuth(
-            token=settings.session_token, endpoint=settings.internal_endpoint
-        )
-
     if not settings.api_key:
-        raise MissingCredentialError("CYCQ_API_KEY is required for api-key auth")
+        raise MissingCredentialError("CYQL_API_KEY is required for read auth")
     return ApiKeyAuth(api_key=settings.api_key, endpoint=settings.official_endpoint)
+
+
+def build_internal_auth(settings: Settings) -> SessionTokenAuth | None:
+    """Build the internal session-token strategy, or ``None`` without a token."""
+    if not settings.session_token:
+        return None
+    return SessionTokenAuth(
+        token=settings.session_token, endpoint=settings.internal_endpoint
+    )

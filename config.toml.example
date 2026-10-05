@@ -1,0 +1,14 @@
+# Cyql CLI configuration — copy to ~/.config/cyql/config.toml (macOS/Linux)
+# or %APPDATA%\cyql\config.toml (Windows) and fill in.
+#
+# Environment variables override these values: CYQL_API_KEY, CYQL_SESSION_TOKEN,
+# CYQL_TIMEZONE, CYQL_TIMEOUT_SECONDS, CYQL_OFFICIAL_ENDPOINT, CYQL_INTERNAL_ENDPOINT.
+# Set CYQL_CONFIG to point at a non-default config file.
+
+[cyql]
+api_key = ""            # official API key (Cyql dashboard -> Settings -> API), sent as X-Api-Key
+session_token = ""      # optional: internal-API bearer token (from the dashboard `token` cookie)
+timezone = ""           # optional IANA zone for display, e.g. "America/Toronto"
+timeout_seconds = 10.0
+# official_endpoint = "https://api.cyql.app/api/graphql"
+# internal_endpoint = "https://api.cyql.app/graphql"

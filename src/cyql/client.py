@@ -23,7 +23,7 @@ from typing import Any
 import httpx
 
 from cyql.auth import Auth
-from cyql.errors import CyqlAPIError, CyqlHTTPError
+from cyql.errors import CyqlAPIError, CyqlHTTPError, MissingCredentialError
 
 __all__ = ["CyqlClient"]
 
@@ -39,6 +39,7 @@ class CyqlClient:
         self,
         auth: Auth,
         *,
+        internal_auth: Auth | None = None,
         timeout: float = 10.0,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
@@ -46,6 +47,7 @@ class CyqlClient:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._auth = auth
+        self._internal_auth = internal_auth
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
         self._sleep = sleep
@@ -69,18 +71,33 @@ class CyqlClient:
             self._http_client.close()
 
     def execute(
-        self, query: str, variables: dict[str, Any] | None = None
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        *,
+        internal: bool = False,
     ) -> dict[str, Any]:
-        """Run a GraphQL operation and return its ``data`` object."""
+        """Run a GraphQL operation and return its ``data`` object.
+
+        Args:
+            query: the GraphQL document to send.
+            variables: values for the document's variables.
+            internal: use the internal API auth instead of the read auth.
+
+        Raises:
+            MissingCredentialError: if ``internal`` is set but no internal auth
+                was supplied to the constructor.
+        """
+        auth = self._resolve_auth(internal)
         payload = {"query": query, "variables": variables or {}}
-        headers = {"Content-Type": "application/json", **self._auth.headers()}
+        headers = {"Content-Type": "application/json", **auth.headers()}
 
         attempt = 0
         while True:
             is_last = attempt == self._max_retries
             try:
                 response = self._http_client.post(
-                    self._auth.endpoint, json=payload, headers=headers
+                    auth.endpoint, json=payload, headers=headers
                 )
             except httpx.TimeoutException as exc:
                 if is_last:
@@ -94,6 +111,15 @@ class CyqlClient:
                 attempt += 1
                 continue
             return self._parse(response)
+
+    def _resolve_auth(self, internal: bool) -> Auth:
+        if not internal:
+            return self._auth
+        if self._internal_auth is None:
+            raise MissingCredentialError(
+                "internal auth is required for internal API calls"
+            )
+        return self._internal_auth
 
     def _backoff(self, attempt: int) -> None:
         self._sleep(self._backoff_seconds * (2**attempt))
