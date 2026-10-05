@@ -68,7 +68,9 @@ def emit(
         console.print(renderable)
         return
     text = renderable if isinstance(renderable, str) else _capture(console, renderable)
-    Path(output).write_text(text, encoding="utf-8")
+    # ``newline=""`` stops text-mode translation turning CSV's own ``\r\n`` into
+    # ``\r\r\n`` on Windows.
+    Path(output).write_text(text, encoding="utf-8", newline="")
 
 
 def _serialize(fmt: OutputFormat, payload: Any) -> str:

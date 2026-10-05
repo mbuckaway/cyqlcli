@@ -166,6 +166,7 @@ def test_load_settings_explicit_path_beats_cyql_config(
     assert settings.api_key == "from-explicit"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX home resolution")
 def test_load_settings_defaults_to_default_config_path(
     clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -190,6 +191,7 @@ def test_config_dir_uses_xdg_config_home_on_posix(
     assert config_dir() == tmp_path / "xdg" / "cyql"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX home resolution")
 def test_config_dir_defaults_to_home_config_on_posix(
     clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -200,6 +202,7 @@ def test_config_dir_defaults_to_home_config_on_posix(
     assert config_dir() == tmp_path / ".config" / "cyql"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX home resolution")
 def test_config_dir_treats_empty_xdg_config_home_as_unset(
     clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -225,6 +228,7 @@ def test_config_dir_windows_without_appdata_uses_home(
     monkeypatch.setattr(os, "name", "nt")
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
     assert config_dir() == tmp_path / "AppData" / "Roaming" / "cyql"
 
@@ -238,7 +242,7 @@ def test_default_config_path_appends_config_toml(
     assert default_config_path() == tmp_path / "cyql" / "config.toml"
 
 
-def test_migrate_api_key_writes_trimmed_key_with_0600_permissions(
+def test_migrate_api_key_writes_trimmed_key(
     clean_env: None, tmp_path: Path
 ) -> None:
     source = _write(tmp_path / "key.txt", "  secret-key-abc \n")
@@ -248,8 +252,19 @@ def test_migrate_api_key_writes_trimmed_key_with_0600_permissions(
 
     parsed: dict[str, Any] = tomllib.loads(target.read_text(encoding="utf-8"))
     assert parsed["cyql"]["api_key"] == "secret-key-abc"
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert source.read_text(encoding="utf-8") == "  secret-key-abc \n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="0600 is a POSIX-only file mode")
+def test_migrate_api_key_writes_0600_permissions_on_posix(
+    clean_env: None, tmp_path: Path
+) -> None:
+    source = _write(tmp_path / "key.txt", "secret-key-abc")
+    target = tmp_path / "config.toml"
+
+    migrate_api_key(source, target)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
 def test_migrate_api_key_output_reloads(clean_env: None, tmp_path: Path) -> None:
@@ -261,6 +276,7 @@ def test_migrate_api_key_output_reloads(clean_env: None, tmp_path: Path) -> None
     assert load_settings(target).api_key == "secret-key-abc"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX home resolution")
 def test_migrate_api_key_writes_default_path_when_none(
     clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
