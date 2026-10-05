@@ -647,11 +647,11 @@ def test_query_unknown_name_reports_error(cli_env: None) -> None:
     assert "unknown query: no-such-query" in result.output
 
 
-def test_query_active_ride_leaders_reports_not_yet_available(cli_env: None) -> None:
+def test_query_active_ride_leaders_reports_missing_club_id(cli_env: None) -> None:
     result = runner.invoke(app, ["query", "active-ride-leaders"])
 
     assert result.exit_code == 1
-    assert "not yet available" in result.output
+    assert "club_id is not set" in result.output
 
 
 def test_query_runs_registered_query(

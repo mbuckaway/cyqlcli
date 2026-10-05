@@ -31,6 +31,7 @@ from cyql.config import (
 _ENV_NAMES = (
     "CYQL_API_KEY",
     "CYQL_SESSION_TOKEN",
+    "CYQL_CLUB_ID",
     "CYQL_TIMEZONE",
     "CYQL_TIMEOUT_SECONDS",
     "CYQL_OFFICIAL_ENDPOINT",
@@ -56,6 +57,7 @@ def test_settings_defaults_match_the_public_contract() -> None:
 
     assert settings.api_key is None
     assert settings.session_token is None
+    assert settings.club_id is None
     assert settings.timezone is None
     assert settings.timeout_seconds == 10.0
     assert settings.official_endpoint == OFFICIAL_ENDPOINT
@@ -141,6 +143,24 @@ def test_load_settings_applies_env_session_token(
     settings = load_settings(tmp_path / "absent.toml")
 
     assert settings.session_token == "t-456"
+
+
+def test_load_settings_reads_club_id_from_toml(clean_env: None, tmp_path: Path) -> None:
+    config = _write(tmp_path / "config.toml", '[cyql]\nclub_id = "club-from-toml"\n')
+
+    settings = load_settings(config)
+
+    assert settings.club_id == "club-from-toml"
+
+
+def test_load_settings_applies_env_club_id(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CYQL_CLUB_ID", "club-from-env")
+
+    settings = load_settings(tmp_path / "absent.toml")
+
+    assert settings.club_id == "club-from-env"
 
 
 def test_load_settings_uses_cyql_config_path(
@@ -294,6 +314,7 @@ def test_render_config_includes_default_other_fields(clean_env: None) -> None:
     parsed: dict[str, Any] = tomllib.loads(_render_config("k-123"))
 
     assert parsed["cyql"]["session_token"] == ""
+    assert parsed["cyql"]["club_id"] == ""
     assert parsed["cyql"]["timezone"] == ""
     assert parsed["cyql"]["timeout_seconds"] == 10.0
     assert parsed["cyql"]["official_endpoint"] == OFFICIAL_ENDPOINT

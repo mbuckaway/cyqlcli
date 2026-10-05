@@ -26,12 +26,15 @@ __all__ = [
     "ClubStats",
     "Event",
     "GpxRoute",
+    "InternalMember",
+    "InternalRide",
     "Member",
     "News",
     "ParticipateStatus",
     "RankingModel",
     "RankingScoreType",
     "Ride",
+    "RideLeader",
     "RideMember",
     "RideType",
 ]
@@ -229,3 +232,33 @@ class GpxRoute(_ApiModel):
     updated_at: datetime | None = Field(default=None, alias="updatedAt")
     download_url: str | None = Field(default=None, alias="downloadUrl")
     is_public: bool = Field(default=False, alias="isPublic")
+
+
+class InternalMember(_ApiModel):
+    """A member reference on the internal API (``fetchRides.roadCaptains``)."""
+
+    id: str
+    first_name: str | None = Field(default=None, alias="firstName")
+    last_name: str | None = Field(default=None, alias="lastName")
+    email: str | None = None
+
+
+class InternalRide(_ApiModel):
+    """An internal API ride with its listed road captains."""
+
+    id: str
+    title: str | None = None
+    start_time: datetime | None = Field(default=None, alias="startTimeUtc")
+    road_captains: list[InternalMember] = Field(
+        default_factory=list, alias="roadCaptains"
+    )
+
+
+class RideLeader(_ApiModel):
+    """One distinct ride leader and the number of rides they led this year."""
+
+    member_id: str
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    rides_led: int = 0
