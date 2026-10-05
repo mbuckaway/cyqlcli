@@ -16,12 +16,15 @@ from cyql.models import (
     ClubStats,
     Event,
     GpxRoute,
+    InternalMember,
+    InternalRide,
     Member,
     News,
     ParticipateStatus,
     RankingModel,
     RankingScoreType,
     Ride,
+    RideLeader,
     RideMember,
     RideType,
 )
@@ -262,3 +265,80 @@ def test_news_maps_media_and_edit_fields() -> None:
     assert article.image_url == "i"
     assert article.pdf_title == "Report"
     assert article.pdf_url == "u"
+
+
+def test_internal_member_maps_camel_aliases() -> None:
+    member = InternalMember.model_validate(
+        {
+            "id": "m1",
+            "firstName": "Ada",
+            "lastName": "Byron",
+            "email": "ada@example.com",
+        }
+    )
+
+    assert member.id == "m1"
+    assert member.first_name == "Ada"
+    assert member.last_name == "Byron"
+    assert member.email == "ada@example.com"
+
+
+def test_internal_member_missing_names_default_to_none() -> None:
+    member = InternalMember.model_validate({"id": "m1"})
+
+    assert member.first_name is None
+    assert member.last_name is None
+    assert member.email is None
+
+
+def test_internal_ride_maps_aliases_and_road_captains() -> None:
+    ride = InternalRide.model_validate(
+        {
+            "id": "r1",
+            "title": "Dawn Patrol",
+            "startTimeUtc": "2026-06-20T08:00:00Z",
+            "roadCaptains": [{"id": "m1", "firstName": "Ada"}],
+        }
+    )
+
+    assert ride.id == "r1"
+    assert ride.title == "Dawn Patrol"
+    assert ride.start_time == datetime(2026, 6, 20, 8, 0, tzinfo=UTC)
+    assert ride.road_captains[0].id == "m1"
+    assert ride.road_captains[0].first_name == "Ada"
+
+
+def test_internal_ride_defaults_missing_fields() -> None:
+    ride = InternalRide.model_validate({"id": "r1"})
+
+    assert ride.title is None
+    assert ride.start_time is None
+    assert ride.road_captains == []
+
+
+def test_ride_leader_maps_snake_case_fields() -> None:
+    leader = RideLeader(
+        member_id="m1",
+        first_name="Ada",
+        last_name="Byron",
+        email="ada@example.com",
+        rides_led=3,
+    )
+
+    assert leader.model_dump(mode="json") == {
+        "member_id": "m1",
+        "first_name": "Ada",
+        "last_name": "Byron",
+        "email": "ada@example.com",
+        "rides_led": 3,
+    }
+
+
+def test_ride_leader_defaults_optional_fields() -> None:
+    leader = RideLeader(member_id="m1")
+
+    assert leader.first_name is None
+    assert leader.last_name is None
+    assert leader.email is None
+    assert leader.rides_led == 0
+

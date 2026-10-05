@@ -38,6 +38,7 @@ INTERNAL_ENDPOINT = "https://api.cyql.app/graphql"
 _ENV_FIELDS = {
     "api_key": "CYQL_API_KEY",
     "session_token": "CYQL_SESSION_TOKEN",  # nosec B105 - env-var name, not a secret
+    "club_id": "CYQL_CLUB_ID",
     "timezone": "CYQL_TIMEZONE",
     "timeout_seconds": "CYQL_TIMEOUT_SECONDS",
     "official_endpoint": "CYQL_OFFICIAL_ENDPOINT",
@@ -58,6 +59,7 @@ class Settings(BaseModel):
 
     api_key: str | None = None
     session_token: str | None = None
+    club_id: str | None = None
     timezone: str | None = None
     timeout_seconds: float = 10.0
     official_endpoint: str = OFFICIAL_ENDPOINT
@@ -143,6 +145,7 @@ def _render_config(api_key: str) -> str:
         "[cyql]",
         f"api_key = {_toml_string(api_key)}",
         'session_token = ""',
+        'club_id = ""',
         'timezone = ""',
         "timeout_seconds = 10.0",
         f"official_endpoint = {_toml_string(OFFICIAL_ENDPOINT)}",

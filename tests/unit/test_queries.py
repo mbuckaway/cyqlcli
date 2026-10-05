@@ -11,15 +11,24 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from typing import Any
 
+import httpx
 import pytest
+import respx
 
-from cyql.errors import CyqlError
+import cyql.queries.active_ride_leaders as active_ride_leaders
+from cyql.auth import ApiKeyAuth, SessionTokenAuth
+from cyql.client import CyqlClient
+from cyql.config import Settings
+from cyql.errors import CyqlError, MissingCredentialError
 from cyql.queries import QUERIES, QuerySpec, get_query, list_queries, register
 
 ACTIVE_RIDE_LEADERS_DESCRIPTION = (
     "Distinct ride leaders listed on rides in the current year"
 )
+INTERNAL_URL = "https://api.cyql.app/graphql"
+READ_URL = "https://api.cyql.app/api/graphql"
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +42,28 @@ def _restore_registry() -> Iterator[None]:
 
 def _spec(name: str) -> QuerySpec:
     return QuerySpec(name=name, description="demo", run=lambda client: [])
+
+
+def _client() -> CyqlClient:
+    return CyqlClient(
+        ApiKeyAuth(api_key="k", endpoint=READ_URL),
+        internal_auth=SessionTokenAuth(token="t-456", endpoint=INTERNAL_URL),
+        sleep=lambda _seconds: None,
+    )
+
+
+def _page(items: list[dict[str, Any]], *, has_next: bool) -> dict[str, Any]:
+    return {
+        "totalCount": len(items),
+        "pageInfo": {"hasNextPage": has_next, "hasPreviousPage": False},
+        "items": items,
+    }
+
+
+def _rides_response(items: list[dict[str, Any]], *, has_next: bool) -> httpx.Response:
+    return httpx.Response(
+        200, json={"data": {"fetchRides": _page(items, has_next=has_next)}}
+    )
 
 
 def test_register_adds_spec_and_returns_it() -> None:
@@ -71,14 +102,89 @@ def test_active_ride_leaders_has_expected_description() -> None:
     )
 
 
-def test_active_ride_leaders_run_raises_not_yet_available() -> None:
+def test_active_ride_leaders_raises_when_club_id_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(active_ride_leaders, "load_settings", lambda: Settings())
     spec = get_query("active-ride-leaders")
 
-    with pytest.raises(
-        CyqlError,
-        match=re.escape(
-            "query 'active-ride-leaders' is not yet available: "
-            "the internal API ride-leader schema has not been captured"
-        ),
-    ):
-        spec.run(None)  # type: ignore[arg-type]
+    with _client() as client, pytest.raises(CyqlError, match=re.escape("club_id is not set")):
+        spec.run(client)
+
+
+@respx.mock
+def test_active_ride_leaders_counts_and_dedupes_across_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        active_ride_leaders, "load_settings", lambda: Settings(club_id="club-1")
+    )
+    ada = {"id": "m1", "firstName": "Ada", "lastName": "Zed", "email": "ada@example.com"}
+    respx.post(INTERNAL_URL).mock(
+        side_effect=[
+            _rides_response(
+                [
+                    {"id": "r1", "roadCaptains": [ada, {"id": "m2"}]},
+                    {"id": "r2", "roadCaptains": [ada]},
+                ],
+                has_next=True,
+            ),
+            _rides_response(
+                [
+                    {
+                        "id": "r3",
+                        "roadCaptains": [
+                            ada,
+                            {"id": "m3", "firstName": "Cy"},
+                            {"id": "m4", "lastName": "Adams"},
+                        ],
+                    },
+                    {"id": "r4", "roadCaptains": [{"id": "m4", "lastName": "Adams"}]},
+                ],
+                has_next=False,
+            ),
+        ]
+    )
+    spec = get_query("active-ride-leaders")
+
+    with _client() as client:
+        leaders = spec.run(client)
+
+    assert [leader.member_id for leader in leaders] == ["m2", "m3", "m4", "m1"]
+    assert [leader.rides_led for leader in leaders] == [1, 1, 2, 3]
+    assert leaders[-1].email == "ada@example.com"
+
+
+@respx.mock
+def test_active_ride_leaders_returns_empty_list_when_no_ride_has_captains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        active_ride_leaders, "load_settings", lambda: Settings(club_id="club-1")
+    )
+    respx.post(INTERNAL_URL).mock(
+        return_value=_rides_response([{"id": "r1"}], has_next=False)
+    )
+    spec = get_query("active-ride-leaders")
+
+    with _client() as client:
+        leaders = spec.run(client)
+
+    assert leaders == []
+
+
+@respx.mock
+def test_active_ride_leaders_propagates_missing_internal_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        active_ride_leaders, "load_settings", lambda: Settings(club_id="club-1")
+    )
+    read_only = CyqlClient(
+        ApiKeyAuth(api_key="k", endpoint=READ_URL), sleep=lambda _seconds: None
+    )
+    spec = get_query("active-ride-leaders")
+
+    with read_only, pytest.raises(MissingCredentialError, match="internal auth is required"):
+        spec.run(read_only)
+

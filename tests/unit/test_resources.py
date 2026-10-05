@@ -8,14 +8,16 @@
 """Tests for the read-only resource accessors (respx-mocked official API)."""
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from cyql.auth import ApiKeyAuth
+from cyql.auth import ApiKeyAuth, SessionTokenAuth
 from cyql.client import CyqlClient
+from cyql.errors import MissingCredentialError
 from cyql.models import ClubMemberStatus, RankingModel, RankingScoreType
 from cyql.resources.challenges import (
     fetch_challenge_by_id,
@@ -25,6 +27,7 @@ from cyql.resources.challenges import (
 from cyql.resources.club import fetch_club_info, fetch_club_stats
 from cyql.resources.events import fetch_event_by_id, fetch_events
 from cyql.resources.gpx import fetch_gpx_route_by_id, fetch_gpx_routes
+from cyql.resources.internal_rides import fetch_internal_rides
 from cyql.resources.members import fetch_member_by_id, fetch_members
 from cyql.resources.news import fetch_news, fetch_news_by_id
 from cyql.resources.rides import (
@@ -35,10 +38,19 @@ from cyql.resources.rides import (
 )
 
 URL = "https://api.cyql.app/api/graphql"
+INTERNAL_URL = "https://api.cyql.app/graphql"
 
 
 def _client() -> CyqlClient:
     return CyqlClient(ApiKeyAuth(api_key="k", endpoint=URL), sleep=lambda _seconds: None)
+
+
+def _internal_client() -> CyqlClient:
+    return CyqlClient(
+        ApiKeyAuth(api_key="k", endpoint=URL),
+        internal_auth=SessionTokenAuth(token="t-456", endpoint=INTERNAL_URL),
+        sleep=lambda _seconds: None,
+    )
 
 
 def _page(items: list[dict[str, Any]], *, has_next: bool) -> dict[str, Any]:
@@ -53,6 +65,18 @@ def _page(items: list[dict[str, Any]], *, has_next: bool) -> dict[str, Any]:
 
 def _variables(route: respx.Route) -> dict[str, Any]:
     return json.loads(route.calls.last.request.content)["variables"]
+
+
+def _variables_at(route: respx.Route, index: int) -> dict[str, Any]:
+    return json.loads(route.calls[index].request.content)["variables"]
+
+
+def _rides_page(items: list[dict[str, Any]], *, has_next: bool) -> dict[str, Any]:
+    return {
+        "totalCount": len(items),
+        "pageInfo": {"hasNextPage": has_next, "hasPreviousPage": False},
+        "items": items,
+    }
 
 
 @respx.mock
@@ -568,3 +592,123 @@ def test_fetch_gpx_route_by_id_returns_none_when_missing() -> None:
         route = fetch_gpx_route_by_id(client, "missing")
 
     assert route is None
+
+
+@respx.mock
+def test_fetch_internal_rides_single_page_yields_rides() -> None:
+    respx.post(INTERNAL_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "fetchRides": _rides_page(
+                        [
+                            {
+                                "id": "r1",
+                                "title": "Dawn Patrol",
+                                "startTimeUtc": "2026-06-20T08:00:00Z",
+                                "roadCaptains": [{"id": "m1", "firstName": "Ada"}],
+                            }
+                        ],
+                        has_next=False,
+                    )
+                }
+            },
+        )
+    )
+
+    with _internal_client() as client:
+        rides = list(fetch_internal_rides(client, "club-1", year=2026))
+
+    assert [ride.id for ride in rides] == ["r1"]
+    assert rides[0].title == "Dawn Patrol"
+    assert rides[0].start_time == datetime(2026, 6, 20, 8, 0, tzinfo=UTC)
+    assert rides[0].road_captains[0].first_name == "Ada"
+
+
+@respx.mock
+def test_fetch_internal_rides_paginates_with_skip_and_take() -> None:
+    route = respx.post(INTERNAL_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={"data": {"fetchRides": _rides_page([{"id": "r1"}], has_next=True)}},
+            ),
+            httpx.Response(
+                200,
+                json={"data": {"fetchRides": _rides_page([{"id": "r2"}], has_next=False)}},
+            ),
+        ]
+    )
+
+    with _internal_client() as client:
+        rides = list(fetch_internal_rides(client, "club-1", year=2026, page_size=25))
+
+    assert [ride.id for ride in rides] == ["r1", "r2"]
+    assert route.call_count == 2
+    assert _variables_at(route, 0)["skip"] == 0
+    assert _variables_at(route, 1)["skip"] == 25
+    assert _variables_at(route, 1)["take"] == 25
+
+
+@respx.mock
+def test_fetch_internal_rides_sends_club_year_filter_variables() -> None:
+    route = respx.post(INTERNAL_URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"fetchRides": _rides_page([], has_next=False)}}
+        )
+    )
+
+    with _internal_client() as client:
+        list(fetch_internal_rides(client, "club-1", year=2026))
+
+    variables = _variables(route)
+    assert variables["clubId"] == "club-1"
+    assert variables["sort"] == {"startTimeUtc": "DESC"}
+    assert variables["showInactiveItems"] is True
+    assert variables["filter"] == {
+        "rideTypes": [],
+        "labelIds": [],
+        "minDate": "Thu, 01 Jan 2026 00:00:00 GMT",
+        "maxDate": "Thu, 31 Dec 2026 23:59:59 GMT",
+    }
+
+
+@respx.mock
+def test_fetch_internal_rides_defaults_year_to_current_utc_year() -> None:
+    route = respx.post(INTERNAL_URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"fetchRides": _rides_page([], has_next=False)}}
+        )
+    )
+
+    with _internal_client() as client:
+        list(fetch_internal_rides(client, "club-1"))
+
+    year = datetime.now(UTC).year
+    expected = datetime(year, 1, 1, tzinfo=UTC).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    assert _variables(route)["filter"]["minDate"] == expected
+
+
+@respx.mock
+def test_fetch_internal_rides_uses_internal_endpoint_and_bearer_header() -> None:
+    route = respx.post(INTERNAL_URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"fetchRides": _rides_page([], has_next=False)}}
+        )
+    )
+
+    with _internal_client() as client:
+        list(fetch_internal_rides(client, "club-1", year=2026))
+
+    request = route.calls.last.request
+    assert str(request.url) == INTERNAL_URL
+    assert request.headers["Authorization"] == "Bearer t-456"
+
+
+def test_fetch_internal_rides_without_internal_auth_raises() -> None:
+    client = _client()
+
+    with client, pytest.raises(MissingCredentialError, match="internal auth is required"):
+        list(fetch_internal_rides(client, "club-1", year=2026))
+
