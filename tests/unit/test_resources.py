@@ -11,15 +11,28 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 import respx
 
 from cyql.auth import ApiKeyAuth
 from cyql.client import CyqlClient
+from cyql.models import ClubMemberStatus, RankingModel, RankingScoreType
+from cyql.resources.challenges import (
+    fetch_challenge_by_id,
+    fetch_challenge_scores,
+    fetch_challenges,
+)
 from cyql.resources.club import fetch_club_info, fetch_club_stats
-from cyql.resources.events import fetch_events
-from cyql.resources.members import fetch_members
-from cyql.resources.news import fetch_news
-from cyql.resources.rides import fetch_next_ride, fetch_ride_by_id, fetch_rides
+from cyql.resources.events import fetch_event_by_id, fetch_events
+from cyql.resources.gpx import fetch_gpx_route_by_id, fetch_gpx_routes
+from cyql.resources.members import fetch_member_by_id, fetch_members
+from cyql.resources.news import fetch_news, fetch_news_by_id
+from cyql.resources.rides import (
+    fetch_next_ride,
+    fetch_ride_by_id,
+    fetch_ride_participants,
+    fetch_rides,
+)
 
 URL = "https://api.cyql.app/api/graphql"
 
@@ -36,6 +49,10 @@ def _page(items: list[dict[str, Any]], *, has_next: bool) -> dict[str, Any]:
         "pageSize": 50,
         "hasNextPage": has_next,
     }
+
+
+def _variables(route: respx.Route) -> dict[str, Any]:
+    return json.loads(route.calls.last.request.content)["variables"]
 
 
 @respx.mock
@@ -92,19 +109,24 @@ def test_fetch_rides_paginates_across_pages() -> None:
 
     assert [ride.id for ride in rides] == ["r1", "r2"]
     assert route.call_count == 2
-    assert json.loads(route.calls.last.request.content)["variables"]["page"] == 2
+    assert _variables(route)["page"] == 2
 
 
+@pytest.mark.parametrize(
+    ("page_size", "expected"),
+    [(1, 1), (50, 50), (100, 100), (101, 100), (500, 100)],
+    ids=["min", "default", "max", "max+1", "far-over"],
+)
 @respx.mock
-def test_fetch_rides_caps_page_size_at_100() -> None:
+def test_fetch_rides_clamps_page_size_to_api_limit(page_size: int, expected: int) -> None:
     route = respx.post(URL).mock(
         return_value=httpx.Response(200, json={"data": {"rides": _page([], has_next=False)}})
     )
 
     with _client() as client:
-        list(fetch_rides(client, page_size=500))
+        list(fetch_rides(client, page_size=page_size))
 
-    assert json.loads(route.calls.last.request.content)["variables"]["pageSize"] == 100
+    assert _variables(route)["pageSize"] == expected
 
 
 @respx.mock
@@ -158,6 +180,53 @@ def test_fetch_ride_by_id_returns_none_when_missing() -> None:
 
 
 @respx.mock
+def test_fetch_ride_participants_yields_participants() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "rideParticipants": _page(
+                        [
+                            {
+                                "memberId": "m1",
+                                "firstName": "Ada",
+                                "lastName": "Byron",
+                                "status": "YES",
+                                "waiverAccepted": True,
+                            }
+                        ],
+                        has_next=False,
+                    )
+                }
+            },
+        )
+    )
+
+    with _client() as client:
+        participants = list(fetch_ride_participants(client, "r1"))
+
+    assert participants[0].member_id == "m1"
+    assert participants[0].first_name == "Ada"
+    assert participants[0].waiver_accepted is True
+
+
+@respx.mock
+def test_fetch_ride_participants_sends_ride_id_and_search_variables() -> None:
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"rideParticipants": _page([], has_next=False)}}
+        )
+    )
+
+    with _client() as client:
+        list(fetch_ride_participants(client, "r1", search="ada"))
+
+    assert _variables(route)["rideId"] == "r1"
+    assert _variables(route)["search"] == "ada"
+
+
+@respx.mock
 def test_fetch_members_yields_members() -> None:
     respx.post(URL).mock(
         return_value=httpx.Response(
@@ -180,6 +249,57 @@ def test_fetch_members_yields_members() -> None:
 
 
 @respx.mock
+def test_fetch_members_sends_member_status_variable() -> None:
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(200, json={"data": {"members": _page([], has_next=False)}})
+    )
+
+    with _client() as client:
+        list(fetch_members(client, status=ClubMemberStatus.APPROVED))
+
+    assert _variables(route)["memberStatus"] == "APPROVED"
+
+
+@respx.mock
+def test_fetch_members_defaults_member_status_to_none() -> None:
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(200, json={"data": {"members": _page([], has_next=False)}})
+    )
+
+    with _client() as client:
+        list(fetch_members(client))
+
+    assert _variables(route)["memberStatus"] is None
+
+
+@respx.mock
+def test_fetch_member_by_id_returns_member() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"memberById": {"id": "m9", "firstName": "Ada", "status": "APPROVED"}}},
+        )
+    )
+
+    with _client() as client:
+        member = fetch_member_by_id(client, "m9")
+
+    assert member is not None
+    assert member.first_name == "Ada"
+    assert member.status is ClubMemberStatus.APPROVED
+
+
+@respx.mock
+def test_fetch_member_by_id_returns_none_when_missing() -> None:
+    respx.post(URL).mock(return_value=httpx.Response(200, json={"data": {"memberById": None}}))
+
+    with _client() as client:
+        member = fetch_member_by_id(client, "missing")
+
+    assert member is None
+
+
+@respx.mock
 def test_fetch_events_yields_events() -> None:
     respx.post(URL).mock(
         return_value=httpx.Response(
@@ -197,6 +317,45 @@ def test_fetch_events_yields_events() -> None:
 
 
 @respx.mock
+def test_fetch_events_sends_fetch_type_variable() -> None:
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(200, json={"data": {"events": _page([], has_next=False)}})
+    )
+
+    with _client() as client:
+        list(fetch_events(client, fetch_type="upcoming"))
+
+    assert _variables(route)["fetchType"] == "upcoming"
+
+
+@respx.mock
+def test_fetch_event_by_id_returns_event() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"eventById": {"id": "e9", "title": "Festival", "pdfUrl": "u"}}},
+        )
+    )
+
+    with _client() as client:
+        event = fetch_event_by_id(client, "e9")
+
+    assert event is not None
+    assert event.title == "Festival"
+    assert event.pdf_url == "u"
+
+
+@respx.mock
+def test_fetch_event_by_id_returns_none_when_missing() -> None:
+    respx.post(URL).mock(return_value=httpx.Response(200, json={"data": {"eventById": None}}))
+
+    with _client() as client:
+        event = fetch_event_by_id(client, "missing")
+
+    assert event is None
+
+
+@respx.mock
 def test_fetch_news_yields_news() -> None:
     respx.post(URL).mock(
         return_value=httpx.Response(
@@ -209,3 +368,203 @@ def test_fetch_news_yields_news() -> None:
         news = list(fetch_news(client))
 
     assert news[0].title == "Trail open"
+
+
+@respx.mock
+def test_fetch_news_by_id_returns_article() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"newsById": {"id": "n9", "title": "Trail open", "imageUrl": "i"}}},
+        )
+    )
+
+    with _client() as client:
+        article = fetch_news_by_id(client, "n9")
+
+    assert article is not None
+    assert article.title == "Trail open"
+    assert article.image_url == "i"
+
+
+@respx.mock
+def test_fetch_news_by_id_returns_none_when_missing() -> None:
+    respx.post(URL).mock(return_value=httpx.Response(200, json={"data": {"newsById": None}}))
+
+    with _client() as client:
+        article = fetch_news_by_id(client, "missing")
+
+    assert article is None
+
+
+@respx.mock
+def test_fetch_challenges_yields_challenges() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "challenges": _page(
+                        [
+                            {
+                                "id": "c1",
+                                "title": "Summer Distance",
+                                "scoreType": "DISTANCE",
+                                "model": "PUBLIC",
+                            }
+                        ],
+                        has_next=False,
+                    )
+                }
+            },
+        )
+    )
+
+    with _client() as client:
+        challenges = list(fetch_challenges(client))
+
+    assert challenges[0].title == "Summer Distance"
+    assert challenges[0].score_type is RankingScoreType.DISTANCE
+    assert challenges[0].model is RankingModel.PUBLIC
+
+
+@respx.mock
+def test_fetch_challenge_by_id_returns_challenge() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"challengeById": {"id": "c9", "title": "Summer", "model": "CLUB"}}},
+        )
+    )
+
+    with _client() as client:
+        challenge = fetch_challenge_by_id(client, "c9")
+
+    assert challenge is not None
+    assert challenge.title == "Summer"
+    assert challenge.model is RankingModel.CLUB
+
+
+@respx.mock
+def test_fetch_challenge_by_id_returns_none_when_missing() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(200, json={"data": {"challengeById": None}})
+    )
+
+    with _client() as client:
+        challenge = fetch_challenge_by_id(client, "missing")
+
+    assert challenge is None
+
+
+@respx.mock
+def test_fetch_challenge_scores_yields_scores() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "challengeScores": _page(
+                        [
+                            {
+                                "memberId": "m1",
+                                "memberName": "Ada",
+                                "score": 42.5,
+                                "rank": 1,
+                                "rideCount": 9,
+                            }
+                        ],
+                        has_next=False,
+                    )
+                }
+            },
+        )
+    )
+
+    with _client() as client:
+        scores = list(fetch_challenge_scores(client, "c1"))
+
+    assert scores[0].member_name == "Ada"
+    assert scores[0].score == 42.5
+    assert scores[0].rank == 1
+
+
+@respx.mock
+def test_fetch_challenge_scores_sends_challenge_id_variable() -> None:
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(
+            200, json={"data": {"challengeScores": _page([], has_next=False)}}
+        )
+    )
+
+    with _client() as client:
+        list(fetch_challenge_scores(client, "c1"))
+
+    assert _variables(route)["challengeId"] == "c1"
+
+
+@respx.mock
+def test_fetch_gpx_routes_yields_routes() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "gpxRoutes": _page(
+                        [
+                            {
+                                "id": "g1",
+                                "title": "Riverside Loop",
+                                "distance": 25,
+                                "isPublic": True,
+                            }
+                        ],
+                        has_next=False,
+                    )
+                }
+            },
+        )
+    )
+
+    with _client() as client:
+        routes = list(fetch_gpx_routes(client))
+
+    assert routes[0].title == "Riverside Loop"
+    assert routes[0].distance == 25
+
+
+@respx.mock
+def test_fetch_gpx_route_by_id_returns_route() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "gpxRouteById": {
+                        "id": "g9",
+                        "title": "Riverside Loop",
+                        "downloadUrl": "u",
+                    }
+                }
+            },
+        )
+    )
+
+    with _client() as client:
+        route = fetch_gpx_route_by_id(client, "g9")
+
+    assert route is not None
+    assert route.title == "Riverside Loop"
+    assert route.download_url == "u"
+
+
+@respx.mock
+def test_fetch_gpx_route_by_id_returns_none_when_missing() -> None:
+    respx.post(URL).mock(
+        return_value=httpx.Response(200, json={"data": {"gpxRouteById": None}})
+    )
+
+    with _client() as client:
+        route = fetch_gpx_route_by_id(client, "missing")
+
+    assert route is None

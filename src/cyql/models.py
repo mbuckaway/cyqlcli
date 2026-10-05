@@ -14,16 +14,83 @@ ignore unknown fields so the client keeps working if the API adds attributes.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["ClubInfo", "ClubStats", "Event", "Member", "News", "Ride"]
+__all__ = [
+    "Challenge",
+    "ChallengeScore",
+    "ClubInfo",
+    "ClubMemberStatus",
+    "ClubStats",
+    "Event",
+    "GpxRoute",
+    "Member",
+    "News",
+    "ParticipateStatus",
+    "RankingModel",
+    "RankingScoreType",
+    "Ride",
+    "RideMember",
+    "RideType",
+]
 
 
 class _ApiModel(BaseModel):
     """Base for API models: populate by field name or alias, ignore extras."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class RideType(StrEnum):
+    """Official ``RideType`` enum."""
+
+    RACE = "RACE"
+    ATB = "ATB"
+    CROSS = "CROSS"
+    TOUR = "TOUR"
+    VIRTUAL = "VIRTUAL"
+    OTHER = "OTHER"
+
+
+class ClubMemberStatus(StrEnum):
+    """Official ``ClubMemberStatus`` enum."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    BLOCKED = "BLOCKED"
+    REMOVED = "REMOVED"
+    EXPIRED = "EXPIRED"
+    ALL = "ALL"
+
+
+class ParticipateStatus(StrEnum):
+    """Official ``ParticipateStatus`` enum."""
+
+    UNKNOWN = "UNKNOWN"
+    YES = "YES"
+    NO = "NO"
+    INTERESTED = "INTERESTED"
+    WAITING = "WAITING"
+    REFUNDED = "REFUNDED"
+    REFUND_REQUESTED = "REFUND_REQUESTED"
+
+
+class RankingScoreType(StrEnum):
+    """Official ``RankingScoreType`` enum."""
+
+    NONE = "NONE"
+    DISTANCE = "DISTANCE"
+    SCORE = "SCORE"
+    NUMBER_OF_RIDES = "NUMBER_OF_RIDES"
+
+
+class RankingModel(StrEnum):
+    """Official ``RankingModel`` enum."""
+
+    CLUB = "CLUB"
+    PUBLIC = "PUBLIC"
 
 
 class ClubStats(_ApiModel):
@@ -55,7 +122,7 @@ class Ride(_ApiModel):
     title: str | None = None
     description: str | None = None
     start_time: datetime | None = Field(default=None, alias="startTime")
-    ride_type: str | None = Field(default=None, alias="rideType")
+    ride_type: RideType | None = Field(default=None, alias="rideType")
     location: str | None = None
     distance: float | None = None
     altitude: float | None = None
@@ -63,9 +130,10 @@ class Ride(_ApiModel):
     duration: int | None = None
     is_public: bool | None = Field(default=None, alias="isPublic")
     max_group_size: int | None = Field(default=None, alias="maxGroupSize")
-    participants_count: int | None = Field(default=None, alias="participantsCount")
+    has_stops: bool | None = Field(default=None, alias="hasStops")
     share_url: str | None = Field(default=None, alias="shareUrl")
     gpx_url: str | None = Field(default=None, alias="gpxUrl")
+    image_url: str | None = Field(default=None, alias="imageUrl")
 
 
 class Member(_ApiModel):
@@ -75,10 +143,20 @@ class Member(_ApiModel):
     first_name: str | None = Field(default=None, alias="firstName")
     last_name: str | None = Field(default=None, alias="lastName")
     email: str | None = None
-    status: str | None = None
+    status: ClubMemberStatus | None = None
     member_since: datetime | None = Field(default=None, alias="memberSinceUtc")
     is_admin: bool = Field(default=False, alias="isAdmin")
     is_road_captain: bool = Field(default=False, alias="isRoadCaptain")
+
+
+class RideMember(_ApiModel):
+    """A ride participant (``RideMemberDto``)."""
+
+    member_id: str | None = Field(default=None, alias="memberId")
+    first_name: str | None = Field(default=None, alias="firstName")
+    last_name: str | None = Field(default=None, alias="lastName")
+    status: ParticipateStatus | None = None
+    waiver_accepted: bool | None = Field(default=None, alias="waiverAccepted")
 
 
 class Event(_ApiModel):
@@ -90,6 +168,9 @@ class Event(_ApiModel):
     start_date_time: datetime | None = Field(default=None, alias="startDateTime")
     end_time: datetime | None = Field(default=None, alias="endTime")
     location: str | None = None
+    image_url: str | None = Field(default=None, alias="imageUrl")
+    pdf_title: str | None = Field(default=None, alias="pdfTitle")
+    pdf_url: str | None = Field(default=None, alias="pdfUrl")
 
 
 class News(_ApiModel):
@@ -99,3 +180,52 @@ class News(_ApiModel):
     title: str | None = None
     description: str | None = None
     publication_date: datetime | None = Field(default=None, alias="publicationDate")
+    edit_date: datetime | None = Field(default=None, alias="editDate")
+    image_url: str | None = Field(default=None, alias="imageUrl")
+    pdf_title: str | None = Field(default=None, alias="pdfTitle")
+    pdf_url: str | None = Field(default=None, alias="pdfUrl")
+
+
+class Challenge(_ApiModel):
+    """A club challenge (``ChallengeDto``)."""
+
+    id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    rules: str | None = None
+    scoring_criteria: str | None = Field(default=None, alias="scoringCriteria")
+    prizes: str | None = None
+    score_type: RankingScoreType | None = Field(default=None, alias="scoreType")
+    start_date: datetime | None = Field(default=None, alias="startDate")
+    end_date: datetime | None = Field(default=None, alias="endDate")
+    only_strava_verified_rides: bool | None = Field(
+        default=None, alias="onlyStravaVerifiedRides"
+    )
+    model: RankingModel | None = None
+    participant_count: int | None = Field(default=None, alias="participantCount")
+    icon_url: str | None = Field(default=None, alias="iconUrl")
+    image_url: str | None = Field(default=None, alias="imageUrl")
+
+
+class ChallengeScore(_ApiModel):
+    """One member's standing in a challenge (``ChallengeScoreDto``)."""
+
+    member_id: str | None = Field(default=None, alias="memberId")
+    member_name: str | None = Field(default=None, alias="memberName")
+    score: float | None = None
+    rank: int | None = None
+    ride_count: int | None = Field(default=None, alias="rideCount")
+
+
+class GpxRoute(_ApiModel):
+    """A downloadable GPX route (``GpxRouteDto``)."""
+
+    id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    distance: int | None = None
+    altitude: int | None = None
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+    download_url: str | None = Field(default=None, alias="downloadUrl")
+    is_public: bool = Field(default=False, alias="isPublic")

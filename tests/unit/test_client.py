@@ -8,20 +8,26 @@
 """Tests for :mod:`cyql.client`."""
 
 import json
+import re
 
 import httpx
 import pytest
 import respx
 
-from cyql.auth import ApiKeyAuth
+from cyql.auth import ApiKeyAuth, SessionTokenAuth
 from cyql.client import CyqlClient
-from cyql.errors import CyqlAPIError, CyqlHTTPError
+from cyql.errors import CyqlAPIError, CyqlHTTPError, MissingCredentialError
 
 URL = "https://api.cyql.app/api/graphql"
+INTERNAL_URL = "https://api.cyql.app/graphql"
 
 
 def _auth() -> ApiKeyAuth:
     return ApiKeyAuth(api_key="k-123", endpoint=URL)
+
+
+def _internal_auth() -> SessionTokenAuth:
+    return SessionTokenAuth(token="t-456", endpoint=INTERNAL_URL)
 
 
 def _client() -> CyqlClient:
@@ -136,3 +142,48 @@ def test_close_leaves_injected_http_client_open() -> None:
 
     assert injected.is_closed is False
     injected.close()
+
+
+@respx.mock
+def test_execute_internal_uses_internal_auth_endpoint_and_headers() -> None:
+    route = respx.post(INTERNAL_URL).mock(
+        return_value=httpx.Response(200, json={"data": {"ride": {"id": "r1"}}})
+    )
+
+    with CyqlClient(
+        _auth(), internal_auth=_internal_auth(), sleep=lambda _seconds: None
+    ) as client:
+        data = client.execute("{ ride { id } }", internal=True)
+
+    assert data == {"ride": {"id": "r1"}}
+    request = route.calls.last.request
+    assert str(request.url) == INTERNAL_URL
+    assert request.headers["Authorization"] == "Bearer t-456"
+    assert "X-Api-Key" not in request.headers
+
+
+@respx.mock
+def test_execute_default_uses_read_auth_when_internal_auth_present() -> None:
+    route = respx.post(URL).mock(
+        return_value=httpx.Response(200, json={"data": {"ok": True}})
+    )
+
+    with CyqlClient(
+        _auth(), internal_auth=_internal_auth(), sleep=lambda _seconds: None
+    ) as client:
+        data = client.execute("{ ok }")
+
+    assert data == {"ok": True}
+    request = route.calls.last.request
+    assert str(request.url) == URL
+    assert request.headers["X-Api-Key"] == "k-123"
+    assert "Authorization" not in request.headers
+
+
+def test_execute_internal_without_internal_auth_raises_missing_credential() -> None:
+    client = CyqlClient(_auth(), sleep=lambda _seconds: None)
+
+    with pytest.raises(
+        MissingCredentialError, match=re.escape("internal auth is required")
+    ):
+        client.execute("{ ok }", internal=True)

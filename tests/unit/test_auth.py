@@ -7,46 +7,59 @@
 # express written permission of Mark Buckaway.
 """Tests for :mod:`cyql.auth`."""
 
+import re
+
 import pytest
 
-from cyql.auth import ApiKeyAuth, SessionTokenAuth, build_auth
-from cyql.config import AuthMode, Settings
+from cyql.auth import (
+    ApiKeyAuth,
+    SessionTokenAuth,
+    build_internal_auth,
+    build_read_auth,
+)
+from cyql.config import INTERNAL_ENDPOINT, OFFICIAL_ENDPOINT, Settings
 from cyql.errors import MissingCredentialError
 
 
-def test_build_auth_api_key_uses_official_endpoint_and_header() -> None:
-    settings = Settings(api_key="k-123", auth_mode=AuthMode.API_KEY, _env_file=None)
+def test_build_read_auth_uses_official_endpoint_and_api_key_header() -> None:
+    auth = build_read_auth(Settings(api_key="k-123"))
 
-    auth = build_auth(settings)
-
-    assert isinstance(auth, ApiKeyAuth)
-    assert auth.endpoint == "https://api.cyql.app/api/graphql"
+    assert auth == ApiKeyAuth(api_key="k-123", endpoint=OFFICIAL_ENDPOINT)
     assert auth.headers() == {"X-Api-Key": "k-123"}
 
 
-def test_build_auth_api_key_missing_key_raises_missing_credential() -> None:
-    settings = Settings(api_key=None, auth_mode=AuthMode.API_KEY, _env_file=None)
+def test_build_read_auth_uses_configured_official_endpoint() -> None:
+    settings = Settings(api_key="k-123", official_endpoint="http://localhost/api/graphql")
 
-    with pytest.raises(MissingCredentialError, match="CYCQ_API_KEY"):
-        build_auth(settings)
+    auth = build_read_auth(settings)
+
+    assert auth.endpoint == "http://localhost/api/graphql"
 
 
-def test_build_auth_session_token_uses_internal_endpoint_and_bearer() -> None:
-    settings = Settings(
-        session_token="t-456", auth_mode=AuthMode.SESSION_TOKEN, _env_file=None
-    )
+@pytest.mark.parametrize("api_key", [None, ""])
+def test_build_read_auth_missing_key_raises_missing_credential(api_key: str | None) -> None:
+    with pytest.raises(
+        MissingCredentialError,
+        match=re.escape("CYQL_API_KEY is required for read auth"),
+    ):
+        build_read_auth(Settings(api_key=api_key))
 
-    auth = build_auth(settings)
 
-    assert isinstance(auth, SessionTokenAuth)
-    assert auth.endpoint == "https://api.cyql.app/graphql"
+def test_build_internal_auth_returns_session_token_auth_when_token_set() -> None:
+    auth = build_internal_auth(Settings(session_token="t-456"))
+
+    assert auth == SessionTokenAuth(token="t-456", endpoint=INTERNAL_ENDPOINT)
     assert auth.headers() == {"Authorization": "Bearer t-456"}
 
 
-def test_build_auth_session_token_missing_token_raises_missing_credential() -> None:
-    settings = Settings(
-        session_token=None, auth_mode=AuthMode.SESSION_TOKEN, _env_file=None
-    )
+def test_build_internal_auth_uses_configured_internal_endpoint() -> None:
+    settings = Settings(session_token="t-456", internal_endpoint="http://localhost/graphql")
 
-    with pytest.raises(MissingCredentialError, match="CYQL_SESSION_TOKEN"):
-        build_auth(settings)
+    auth = build_internal_auth(settings)
+
+    assert auth == SessionTokenAuth(token="t-456", endpoint="http://localhost/graphql")
+
+
+@pytest.mark.parametrize("token", [None, ""])
+def test_build_internal_auth_returns_none_when_no_token(token: str | None) -> None:
+    assert build_internal_auth(Settings(session_token=token)) is None

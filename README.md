@@ -1,111 +1,118 @@
 # cyql
 
-A read-only Python client and command-line tool for the [Cyql](https://cyql.app) cycling-club
-platform, built for the **GORBA** club (Guelph Off-Road Bicycling Association). It talks to Cyql's
-official GraphQL API and surfaces club data — rides, statistics, members, news, events, and club
-info — from your terminal.
-
-The code is layered so a future **Discord bot** can reuse the same core (see
-[`docs/DISCORD_CHATBOX.md`](docs/DISCORD_CHATBOX.md)).
-
-## Status
-
-- **v1 — read-only.** The official Cyql API key is read-only (it exposes no mutations), so creating,
-  updating, or cancelling rides is **deferred**; it would require Cyql's unsupported internal API.
-- **Discord bot — designed, not built.** Push/notification polling is deferred. See the design doc.
-
-## Features
-
-- Typed GraphQL client over `httpx` with retry/backoff and clear error handling
-- `page`/`pageSize` pagination, typed [pydantic](https://docs.pydantic.dev) models
-- A [Typer](https://typer.tiangolo.com) CLI with rich tables and a `--json` mode
-- Ride/event/news times shown in a configurable timezone (defaults to your system local zone)
+A Python client and command-line tool for the [Cyql](https://cyql.app) cycling-club platform,
+built for the **GORBA** club (Guelph Off-Road Bicycling Association). It talks to Cyql's official
+GraphQL API and surfaces club data — rides, ride participants, members, statistics, news, events,
+challenges, and GPX routes — from your terminal in a form both people and AI assistants can consume.
 
 ## Requirements
 
 - Python **3.14+**
-- [uv](https://docs.astral.sh/uv/) for environment and dependency management
 - A Cyql **API key** (Cyql dashboard → Settings → API)
 
-## Setup
+## Install
 
 ```bash
-uv sync                 # create .venv and install runtime + dev dependencies
-cp .env.example .env     # then add your Cyql API key (CYCQ_API_KEY=...)
+uv tool install https://github.com/mbuckaway/cyqlcli/releases/download/v1.0.0/cyql-1.0.0-py3-none-any.whl
+cyql --help
 ```
 
-`.env` is git-ignored. The API key is read from the `CYCQ_API_KEY` environment variable (or `.env`).
+`uv tool install` puts a `cyql` executable on your `PATH`. A single wheel serves macOS, Linux, and
+Windows.
 
 ## Configuration
 
-All settings are environment variables (or lines in `.env`):
+Configuration lives in a TOML file in the standard config directory:
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `CYCQ_API_KEY` | yes | — | Official API key, sent as the `X-Api-Key` header |
-| `CYQL_TIMEZONE` | no | system local | IANA zone for displaying times, e.g. `America/Toronto` |
-| `CYQL_TIMEOUT_SECONDS` | no | `10` | HTTP timeout |
-| `CYQL_OFFICIAL_ENDPOINT` | no | `https://api.cyql.app/api/graphql` | Read API endpoint |
-| `CYQL_AUTH_MODE` | no | `api-key` | `api-key` or `session-token` (the latter is for the deferred internal API) |
+- macOS / Linux: `~/.config/cyql/config.toml`
+- Windows: `%APPDATA%\cyql\config.toml`
+
+```toml
+[cyql]
+api_key = "..."          # official API key, sent as the X-Api-Key header
+session_token = ""       # optional: internal-API bearer token (for specialized queries)
+timezone = ""            # optional IANA zone, e.g. "America/Toronto"
+timeout_seconds = 10.0
+# official_endpoint / internal_endpoint override the Cyql defaults when set
+```
+
+Environment variables override the file: `CYQL_API_KEY`, `CYQL_SESSION_TOKEN`, `CYQL_TIMEZONE`,
+`CYQL_TIMEOUT_SECONDS`, `CYQL_OFFICIAL_ENDPOINT`, `CYQL_INTERNAL_ENDPOINT`. Set `CYQL_CONFIG` to
+point at a non-default config file.
 
 ## Usage
 
 ```bash
-uv run cyql --help
-uv run cyql nextride                 # the next upcoming ride
-uv run cyql rides -n 5               # upcoming rides (default 5)
-uv run cyql ride "tuesday"           # first ride matching a search term
-uv run cyql stats                    # club statistics
-uv run cyql members -n 25            # members (admin/local use)
-uv run cyql news                     # latest club news
-uv run cyql events                   # upcoming events
-uv run cyql club                     # club information
+cyql nextride                          # the next upcoming ride
+cyql rides -n 5                        # upcoming rides (default 5)
+cyql rides --all -n 10                 # upcoming + past rides
+cyql rides --search gravel             # rides matching a search term
+cyql ride "tuesday"                    # first ride matching a search term
+cyql ride-participants <ride-id>       # who is signed up for a ride
+cyql stats                             # club statistics
+cyql club                              # club information
+cyql members -n 25                     # members (name/email/status/role)
+cyql members --status approved         # members filtered by status
+cyql member <member-id>                # one member's details
+cyql news -n 5                         # latest club news
+cyql news-post <news-id>               # one news article
+cyql events -n 10                      # upcoming events
+cyql event <event-id>                  # one event
+cyql challenges                        # club challenges
+cyql challenge <challenge-id>          # one challenge
+cyql challenge-scores <challenge-id>   # a challenge's leaderboard
+cyql gpx                               # the GPX route library
+cyql gpx-route <gpx-route-id>          # one GPX route
+cyql query --list                      # list specialized queries
+cyql query active-ride-leaders         # run a specialized query
+cyql version                           # the installed version
 ```
 
-Every data command also accepts `--json` for machine-readable output:
+### Output formats
 
-```console
-$ uv run cyql stats --json
-{
-  "total_rides": 78,
-  "member_count": 167,
-  "total_kilometers": 991.0,
-  "total_admins": 5
-}
-```
+Every data command has three output modes:
 
-To display ride times in your club's timezone:
+- **table** (default) — a rich table on screen.
+- **JSON** — `--json` prints machine-readable JSON (snake_case keys), ideal for Kimi/Deepseek and
+  other AI systems.
+- **CSV** — `--csv` prints comma-separated values.
 
-```bash
-CYQL_TIMEZONE=America/Toronto uv run cyql nextride
-```
+`--output PATH` (or `-o PATH`) writes the output to a file instead of the screen, so
+`cyql rides --csv --output rides.csv` produces a CSV file.
 
 ## Development
 
 ```bash
-uv run ruff check .                                        # lint (ruff, target py314)
-uv run mypy                                                # type-check (strict)
-uv run pytest                                              # unit tests + 90% branch-coverage gate
-uv run pytest tests/functional -m functional --no-cov     # functional tests (local GraphQL server)
+uv sync                              # create .venv and install runtime + dev deps
+uv run ruff check .                  # lint (ruff, target py314)
+uv run mypy                          # type-check (strict)
+uv run pytest                        # unit tests + 90% branch-coverage gate
+uv run pytest tests/functional -m functional --no-cov   # functional tests (local GraphQL server)
 ```
 
 Tests follow TDD. Unit tests mock only the HTTP boundary (via `respx`) and use Hypothesis for pure
 helpers; functional tests run against a real local GraphQL server (`tools/mockserver`, ariadne over
 `wsgiref`) with no client-side mocks.
 
+## Releasing
+
+Releases are driven by git tags on `main`. A tag `vX.Y.Z` triggers the `Release` workflow, which
+verifies the tag matches `src/cyql/__init__.py::__version__`, runs the full test gate, builds the
+wheel + sdist, and attaches them to a GitHub Release. Install with the wheel URL as shown above.
+
 ## Project layout
 
 ```
 src/cyql/
-  config.py            # settings (pydantic-settings)
-  auth.py              # X-Api-Key / Bearer auth strategies
+  config.py            # TOML config loader (std lib tomllib) + settings
+  auth.py              # X-Api-Key (read) and Bearer (internal) auth strategies
   client.py            # httpx GraphQL client (retry, error mapping)
   paginate.py          # page/pageSize pagination
-  models.py            # typed API models
-  resources/           # rides, club, members, events, news accessors
-  cli/                 # Typer app + rich/JSON rendering
+  models.py            # typed API models + enums
+  resources/           # rides, members, club, events, news, challenges, gpx accessors
+  queries/             # named specialized queries (the `query` command)
+  cli/                 # Typer app + rich/JSON/CSV rendering
 tools/mockserver/      # local GraphQL server for functional tests
-docs/DISCORD_CHATBOX.md # Discord bot design + hosting notes
 ```
 
 ## License

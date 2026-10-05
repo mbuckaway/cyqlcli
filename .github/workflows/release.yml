@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(uv run python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('src/cyql/__init__.py').read()).group(1))")"
+          if [ "$TAG" != "$PKG_VERSION" ]; then
+            echo "Tag $TAG does not match package version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Validate Python (syntax + ruff + mypy + bandit + pip-audit)
+        run: uv run python scripts/validate-python.py
+
+      - name: Unit tests (90% branch-coverage gate)
+        run: uv run pytest
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag

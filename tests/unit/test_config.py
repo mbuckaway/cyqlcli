@@ -7,61 +7,295 @@
 # express written permission of Mark Buckaway.
 """Tests for :mod:`cyql.config`."""
 
+import os
+import stat
+import tomllib
+from pathlib import Path
+from typing import Any
+
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
-from cyql.config import AuthMode, Settings
+from cyql.config import (
+    INTERNAL_ENDPOINT,
+    OFFICIAL_ENDPOINT,
+    Settings,
+    _render_config,
+    config_dir,
+    default_config_path,
+    load_settings,
+    migrate_api_key,
+)
 
-
-def test_settings_reads_api_key_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CYCQ_API_KEY", "secret-key-123")
-
-    settings = Settings(_env_file=None)
-
-    assert settings.api_key == "secret-key-123"
-
-
-def test_settings_defaults_auth_mode_to_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CYQL_AUTH_MODE", raising=False)
-
-    settings = Settings(_env_file=None)
-
-    assert settings.auth_mode is AuthMode.API_KEY
-
-
-def test_settings_defaults_official_and_internal_endpoints() -> None:
-    settings = Settings(_env_file=None)
-
-    assert settings.official_endpoint == "https://api.cyql.app/api/graphql"
-    assert settings.internal_endpoint == "https://api.cyql.app/graphql"
+_ENV_NAMES = (
+    "CYQL_API_KEY",
+    "CYQL_SESSION_TOKEN",
+    "CYQL_TIMEZONE",
+    "CYQL_TIMEOUT_SECONDS",
+    "CYQL_OFFICIAL_ENDPOINT",
+    "CYQL_INTERNAL_ENDPOINT",
+    "CYQL_CONFIG",
+)
 
 
-def test_settings_session_token_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CYQL_SESSION_TOKEN", raising=False)
+@pytest.fixture
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every CYQL_* variable so ambient config cannot leak into a test."""
+    for name in _ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
 
-    settings = Settings(_env_file=None)
 
+def _write(path: Path, body: str) -> Path:
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_settings_defaults_match_the_public_contract() -> None:
+    settings = Settings()
+
+    assert settings.api_key is None
     assert settings.session_token is None
-
-
-def test_settings_auth_mode_reads_session_token_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CYQL_AUTH_MODE", "session-token")
-
-    settings = Settings(_env_file=None)
-
-    assert settings.auth_mode is AuthMode.SESSION_TOKEN
-
-
-def test_settings_timezone_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CYQL_TIMEZONE", raising=False)
-
-    settings = Settings(_env_file=None)
-
     assert settings.timezone is None
+    assert settings.timeout_seconds == 10.0
+    assert settings.official_endpoint == OFFICIAL_ENDPOINT
+    assert settings.internal_endpoint == INTERNAL_ENDPOINT
 
 
-def test_settings_reads_timezone_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CYQL_TIMEZONE", "America/Toronto")
+def test_settings_ignores_extra_keys() -> None:
+    settings = Settings(api_key="k", unknown="ignored")  # type: ignore[call-arg]
 
-    settings = Settings(_env_file=None)
+    assert settings.api_key == "k"
 
+
+def test_load_settings_missing_file_returns_defaults(clean_env: None, tmp_path: Path) -> None:
+    settings = load_settings(tmp_path / "absent.toml")
+
+    assert settings.api_key is None
+    assert settings.timeout_seconds == 10.0
+    assert settings.official_endpoint == OFFICIAL_ENDPOINT
+
+
+def test_load_settings_reads_cyql_table(clean_env: None, tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "config.toml",
+        '[cyql]\napi_key = "from-toml"\ntimezone = "America/Toronto"\ntimeout_seconds = 3.5\n',
+    )
+
+    settings = load_settings(config)
+
+    assert settings.api_key == "from-toml"
     assert settings.timezone == "America/Toronto"
+    assert settings.timeout_seconds == 3.5
+
+
+def test_load_settings_ignores_other_tables_and_keys(clean_env: None, tmp_path: Path) -> None:
+    config = _write(
+        tmp_path / "config.toml",
+        '[cyql]\napi_key = "from-toml"\nunknown_key = "ignored"\n\n[other]\napi_key = "nope"\n',
+    )
+
+    settings = load_settings(config)
+
+    assert settings.api_key == "from-toml"
+
+
+def test_load_settings_env_value_beats_toml(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write(tmp_path / "config.toml", '[cyql]\napi_key = "from-toml"\n')
+    monkeypatch.setenv("CYQL_API_KEY", "from-env")
+
+    settings = load_settings(config)
+
+    assert settings.api_key == "from-env"
+
+
+def test_load_settings_empty_env_value_does_not_beat_toml(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write(tmp_path / "config.toml", '[cyql]\napi_key = "from-toml"\n')
+    monkeypatch.setenv("CYQL_API_KEY", "")
+
+    settings = load_settings(config)
+
+    assert settings.api_key == "from-toml"
+
+
+def test_load_settings_coerces_env_timeout_seconds_to_float(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CYQL_TIMEOUT_SECONDS", "2.5")
+
+    settings = load_settings(tmp_path / "absent.toml")
+
+    assert isinstance(settings.timeout_seconds, float)
+    assert settings.timeout_seconds == 2.5
+
+
+def test_load_settings_applies_env_session_token(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CYQL_SESSION_TOKEN", "t-456")
+
+    settings = load_settings(tmp_path / "absent.toml")
+
+    assert settings.session_token == "t-456"
+
+
+def test_load_settings_uses_cyql_config_path(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write(tmp_path / "custom.toml", '[cyql]\napi_key = "from-env-path"\n')
+    monkeypatch.setenv("CYQL_CONFIG", str(config))
+
+    settings = load_settings()
+
+    assert settings.api_key == "from-env-path"
+
+
+def test_load_settings_explicit_path_beats_cyql_config(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_config = _write(tmp_path / "env.toml", '[cyql]\napi_key = "from-env-path"\n')
+    explicit = _write(tmp_path / "explicit.toml", '[cyql]\napi_key = "from-explicit"\n')
+    monkeypatch.setenv("CYQL_CONFIG", str(env_config))
+
+    settings = load_settings(explicit)
+
+    assert settings.api_key == "from-explicit"
+
+
+def test_load_settings_defaults_to_default_config_path(
+    clean_env: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    config_dir_path = tmp_path / ".config" / "cyql"
+    config_dir_path.mkdir(parents=True)
+    _write(config_dir_path / "config.toml", '[cyql]\napi_key = "from-default-path"\n')
+
+    settings = load_settings()
+
+    assert settings.api_key == "from-default-path"
+
+
+def test_config_dir_uses_xdg_config_home_on_posix(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    assert config_dir() == tmp_path / "xdg" / "cyql"
+
+
+def test_config_dir_defaults_to_home_config_on_posix(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert config_dir() == tmp_path / ".config" / "cyql"
+
+
+def test_config_dir_treats_empty_xdg_config_home_as_unset(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert config_dir() == tmp_path / ".config" / "cyql"
+
+
+def test_config_dir_uses_appdata_on_windows(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+
+    assert config_dir() == tmp_path / "Roaming" / "cyql"
+
+
+def test_config_dir_windows_without_appdata_uses_home(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert config_dir() == tmp_path / "AppData" / "Roaming" / "cyql"
+
+
+def test_default_config_path_appends_config_toml(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    assert default_config_path() == tmp_path / "cyql" / "config.toml"
+
+
+def test_migrate_api_key_writes_trimmed_key_with_0600_permissions(
+    clean_env: None, tmp_path: Path
+) -> None:
+    source = _write(tmp_path / "key.txt", "  secret-key-abc \n")
+    target = tmp_path / "nested" / "config.toml"
+
+    migrate_api_key(source, target)
+
+    parsed: dict[str, Any] = tomllib.loads(target.read_text(encoding="utf-8"))
+    assert parsed["cyql"]["api_key"] == "secret-key-abc"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert source.read_text(encoding="utf-8") == "  secret-key-abc \n"
+
+
+def test_migrate_api_key_output_reloads(clean_env: None, tmp_path: Path) -> None:
+    source = _write(tmp_path / "key.txt", "secret-key-abc")
+
+    target = tmp_path / "config.toml"
+    migrate_api_key(source, target)
+
+    assert load_settings(target).api_key == "secret-key-abc"
+
+
+def test_migrate_api_key_writes_default_path_when_none(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    source = _write(tmp_path / "key.txt", "secret-key-abc")
+
+    migrate_api_key(source)
+
+    assert (tmp_path / ".config" / "cyql" / "config.toml").exists()
+
+
+def test_render_config_includes_default_other_fields(clean_env: None) -> None:
+    parsed: dict[str, Any] = tomllib.loads(_render_config("k-123"))
+
+    assert parsed["cyql"]["session_token"] == ""
+    assert parsed["cyql"]["timezone"] == ""
+    assert parsed["cyql"]["timeout_seconds"] == 10.0
+    assert parsed["cyql"]["official_endpoint"] == OFFICIAL_ENDPOINT
+    assert parsed["cyql"]["internal_endpoint"] == INTERNAL_ENDPOINT
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["plain", 'has"quote', "back\\slash", "line\nbreak", "bell\x07", "del\x7f"],
+)
+def test_render_config_escapes_special_characters(clean_env: None, raw: str) -> None:
+    parsed: dict[str, Any] = tomllib.loads(_render_config(raw))
+
+    assert parsed["cyql"]["api_key"] == raw
+
+
+@given(st.text())
+def test_render_config_round_trips_api_key(api_key: str) -> None:
+    parsed = tomllib.loads(_render_config(api_key))
+
+    assert parsed["cyql"]["api_key"] == api_key

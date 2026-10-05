@@ -29,7 +29,7 @@ def mock_server(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     endpoint = f"http://127.0.0.1:{server.server_port}/graphql"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    monkeypatch.setenv("CYCQ_API_KEY", EXPECTED_KEY)
+    monkeypatch.setenv("CYQL_API_KEY", EXPECTED_KEY)
     monkeypatch.setenv("CYQL_OFFICIAL_ENDPOINT", endpoint)
     try:
         yield endpoint
